@@ -1,7 +1,7 @@
 {
   "name": "hermes-profit-engine",
-  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage, VE estimate ranges, pay-path filter. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
-  "version": "0.3.3",
+  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage, VE estimate ranges, pay-path filter, batch pay-path, portfolio status. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
+  "version": "0.3.4",
   "provider": {
     "organization": "unicentrocucuta",
     "url": "https://github.com/unicentrocucuta/pe-x402-gateway"
@@ -49,6 +49,18 @@
       "name": "Pay-path filter",
       "description": "Classify issue/listing text: escrow/algora/opire funded vs unfunded Opire footer vs contest vs illiquid. Never invents amounts.",
       "tags": ["bounties", "filter", "x402"]
+    },
+    {
+      "id": "batch-pay-path",
+      "name": "Batch pay-path filter",
+      "description": "Classify up to 25 issue/listing objects in one call; returns pursue/consider shortlists + per-item reasons.",
+      "tags": ["bounties", "filter", "batch", "x402"]
+    },
+    {
+      "id": "portfolio-status",
+      "name": "Portfolio status",
+      "description": "Local PE active lines + realized net reminder from RUN_STATE (no invented balances).",
+      "tags": ["ops", "portfolio", "x402"]
     }
   ],
   "endpoints": {
@@ -60,7 +72,9 @@
     "diffReview": "/v1/diff-review",
     "bountyTriage": "/v1/bounty-triage",
     "veEstimate": "/v1/ve-estimate",
-    "payPathFilter": "/v1/pay-path-filter"
+    "payPathFilter": "/v1/pay-path-filter",
+    "batchPayPath": "/v1/batch-pay-path",
+    "portfolioStatus": "/v1/portfolio-status"
   },
   "payment": {
     "protocol": "x402",

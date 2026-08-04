@@ -256,3 +256,72 @@ def classify_pay_path(payload: dict | None = None) -> dict[str, Any]:
         ),
         "mode": "demo",
     }
+
+
+def classify_pay_path_batch(payload: dict | None = None) -> dict[str, Any]:
+    """Classify up to 25 listings; return summary counts + per-item results.
+
+    Prefer this over N single calls when bulk-filtering hunter output.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    raw_items = payload.get("items") or payload.get("candidates") or []
+    if not isinstance(raw_items, list):
+        raw_items = []
+    limit = 25
+    try:
+        req_limit = int(payload.get("limit") or limit)
+        limit = max(1, min(req_limit, 25))
+    except (TypeError, ValueError):
+        limit = 25
+
+    results: list[dict[str, Any]] = []
+    counts = {"pursue": 0, "consider": 0, "skip": 0, "other": 0}
+    for idx, item in enumerate(raw_items[:limit]):
+        if not isinstance(item, dict):
+            results.append(
+                {
+                    "index": idx,
+                    "ok": False,
+                    "decision": "skip",
+                    "reasons": ["item_not_object"],
+                }
+            )
+            counts["skip"] += 1
+            continue
+        row = classify_pay_path(item)
+        decision = str(row.get("decision") or "other")
+        if decision in counts:
+            counts[decision] += 1
+        else:
+            counts["other"] += 1
+        results.append(
+            {
+                "index": idx,
+                "title": item.get("title"),
+                "url": item.get("url"),
+                "repo": item.get("repo") or item.get("repository"),
+                "decision": row.get("decision"),
+                "pay_type": row.get("pay_type"),
+                "p_pay_hint_central": row.get("p_pay_hint_central"),
+                "amount_guess_usd": row.get("amount_guess_usd"),
+                "flags": row.get("flags"),
+                "reasons": row.get("reasons"),
+            }
+        )
+
+    pursue = [r for r in results if r.get("decision") == "pursue"]
+    consider = [r for r in results if r.get("decision") == "consider"]
+    return {
+        "ok": True,
+        "method": "pay_path_batch_v1",
+        "count": len(results),
+        "counts": counts,
+        "pursue": pursue,
+        "consider": consider,
+        "items": results,
+        "honesty": (
+            "Batch wrapper around pay_path_filter_v1. Does not invent rewards. "
+            "Use pursue/consider shortlists only as triage — not payment guarantees."
+        ),
+        "mode": "demo",
+    }

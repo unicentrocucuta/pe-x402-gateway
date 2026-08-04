@@ -22,13 +22,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from citation import score_claim  # noqa: E402
-from pay_path import classify_pay_path  # noqa: E402
+from pay_path import classify_pay_path, classify_pay_path_batch  # noqa: E402
 from ve import estimate_ve  # noqa: E402
 
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.3"
+VERSION = "0.3.4"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
@@ -38,6 +38,8 @@ PRICES = {
     "/v1/bounty-triage": 0.02,
     "/v1/ve-estimate": 0.01,
     "/v1/pay-path-filter": 0.01,
+    "/v1/batch-pay-path": 0.02,
+    "/v1/portfolio-status": 0.01,
 }
 
 # Free demo: limited body size; header X-PE-DEMO: 1 bypasses 402 for paid routes
@@ -278,6 +280,53 @@ def _bounty_triage_payload(data: dict | None = None) -> dict:
     }
 
 
+def _portfolio_status_payload() -> dict:
+    """Local RUN_STATE / open-line snapshot — no invented balances."""
+    run_path = Path("/home/dany/projects/profit-engine/RUN_STATE.json")
+    profit_path = Path("/home/dany/projects/profit-engine/PROFIT_LEDGER.csv")
+    out: dict = {
+        "ok": True,
+        "method": "portfolio_status_v1",
+        "payment": "stub_or_demo",
+        "honesty": "Reads local PE state only; net_realized is ledger truth, not pipeline nominal.",
+    }
+    if run_path.exists():
+        try:
+            st = json.loads(run_path.read_text(encoding="utf-8"))
+            lines = st.get("active_lines") or []
+            out["net_realized_usd"] = st.get("net_realized_usd")
+            out["last_worker_at_utc"] = st.get("last_worker_at_utc")
+            out["active_lines"] = [
+                {
+                    "id": ln.get("id"),
+                    "type": ln.get("type"),
+                    "status": ln.get("status"),
+                    "reward": ln.get("reward"),
+                    "pr": ln.get("pr"),
+                    "pay_path": ln.get("pay_path"),
+                    "repo": ln.get("repo"),
+                }
+                for ln in lines
+                if isinstance(ln, dict)
+            ][:20]
+            out["next_actions"] = (st.get("next_actions") or [])[:8]
+            out["strategy_prefer"] = (st.get("strategy") or {}).get("prefer")
+        except Exception as exc:  # noqa: BLE001
+            out["ok"] = False
+            out["error"] = str(exc)
+    else:
+        out["ok"] = False
+        out["error"] = "RUN_STATE.json missing"
+    # ledger row count only (no full dump)
+    if profit_path.exists():
+        try:
+            rows = profit_path.read_text(encoding="utf-8").strip().splitlines()
+            out["profit_ledger_rows"] = max(0, len(rows) - 1)
+        except Exception:  # noqa: BLE001
+            out["profit_ledger_rows"] = None
+    return out
+
+
 def _diff_review_payload(data: dict) -> dict:
     """Lightweight structured review of a provided unified diff (no network)."""
     title = str(data.get("title") or "")[:300]
@@ -431,6 +480,8 @@ class Handler(BaseHTTPRequestHandler):
                         "bounty-triage",
                         "ve-estimate",
                         "pay-path-filter",
+                        "batch-pay-path",
+                        "portfolio-status",
                         "agent-card",
                         "metrics",
                     ],
@@ -503,6 +554,21 @@ class Handler(BaseHTTPRequestHandler):
                 "labels": (qs.get("labels") or [""])[0],
             }
             payload = classify_pay_path(data)
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/batch-pay-path":
+            if not self._gate_paid(path):
+                return
+            # GET: empty batch (shows schema via zero items)
+            payload = classify_pay_path_batch({"items": []})
+            payload["note"] = "POST JSON {items:[...]} for bulk classify"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/portfolio-status":
+            if not self._gate_paid(path):
+                return
+            payload = _portfolio_status_payload()
+            payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return
         if path == "/":
@@ -579,6 +645,20 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = _read_json(self)
             payload = classify_pay_path(data if isinstance(data, dict) else {})
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/batch-pay-path":
+            if not self._gate_paid(path):
+                return
+            data = _read_json(self)
+            payload = classify_pay_path_batch(data if isinstance(data, dict) else {})
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/portfolio-status":
+            if not self._gate_paid(path):
+                return
+            payload = _portfolio_status_payload()
+            payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return
         self._send_json(404, {"error": "not_found", "path": path}, path=path)
