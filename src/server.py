@@ -22,12 +22,13 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from citation import score_claim  # noqa: E402
+from pay_path import classify_pay_path  # noqa: E402
 from ve import estimate_ve  # noqa: E402
 
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
@@ -36,6 +37,7 @@ PRICES = {
     "/v1/diff-review": 0.03,
     "/v1/bounty-triage": 0.02,
     "/v1/ve-estimate": 0.01,
+    "/v1/pay-path-filter": 0.01,
 }
 
 # Free demo: limited body size; header X-PE-DEMO: 1 bypasses 402 for paid routes
@@ -428,6 +430,7 @@ class Handler(BaseHTTPRequestHandler):
                         "diff-review",
                         "bounty-triage",
                         "ve-estimate",
+                        "pay-path-filter",
                         "agent-card",
                         "metrics",
                     ],
@@ -486,6 +489,20 @@ class Handler(BaseHTTPRequestHandler):
             if qs.get("p_pay_central"):
                 data["p_pay_central"] = qs["p_pay_central"][0]
             payload = estimate_ve(data)
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/pay-path-filter":
+            if not self._gate_paid(path):
+                return
+            qs = parse_qs(parsed.query)
+            data = {
+                "title": (qs.get("title") or [""])[0][:500],
+                "body": (qs.get("body") or qs.get("text") or [""])[0][:8000],
+                "repo": (qs.get("repo") or [""])[0][:200],
+                "comments": (qs.get("comments") or ["0"])[0],
+                "labels": (qs.get("labels") or [""])[0],
+            }
+            payload = classify_pay_path(data)
             self._send_json(200, payload, path=path, demo=True)
             return
         if path == "/":
@@ -555,6 +572,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = _read_json(self)
             payload = estimate_ve(data if isinstance(data, dict) else {})
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/pay-path-filter":
+            if not self._gate_paid(path):
+                return
+            data = _read_json(self)
+            payload = classify_pay_path(data if isinstance(data, dict) else {})
             self._send_json(200, payload, path=path, demo=True)
             return
         self._send_json(404, {"error": "not_found", "path": path}, path=path)

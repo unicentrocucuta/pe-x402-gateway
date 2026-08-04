@@ -2,9 +2,9 @@
 
 Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
 
-## Status (2026-08-04T18:35Z)
+## Status (2026-08-04T18:55Z)
 
-**v0.3.2** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
+**v0.3.3** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
 
 | Route | Behavior |
 |-------|----------|
@@ -17,9 +17,11 @@ Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable v
 | `POST /v1/diff-review` | **402** unless demo header |
 | `GET/POST /v1/bounty-triage` | **402** unless demo header — ranks local hunter/watchdog snapshots |
 | `GET/POST /v1/ve-estimate` | **402** unless demo header — cons/central/opt net VE ranges |
+| `GET/POST /v1/pay-path-filter` | **402** unless demo header — classify real pay path vs noise |
 
-Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 -m unittest discover -s tests -v` (9 tests).
+Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 -m unittest discover -s tests -v` (14 tests).
 
+v0.3.3 adds: `/v1/pay-path-filter` (skip unfunded Opire footers, contests, illiquid tokens; pursue algora/titled $).
 v0.3.2 adds: `/v1/ve-estimate` (honest ranges; contests/token forced low P(pay)).
 v0.3.1 adds: `/v1/bounty-triage` (skip farms/contests/illiquid markers; never invents $).
 v0.3 adds: sliding-window rate limit, in-process metering, honest receipt stub (never trusts bare `X-PAYMENT`), `/v1/diff-review`.
