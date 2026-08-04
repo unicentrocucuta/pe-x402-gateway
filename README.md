@@ -2,9 +2,9 @@
 
 Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
 
-## Status (2026-08-04T17:45Z)
+## Status (2026-08-04T18:10Z)
 
-**v0.3.0** on VPS port **8791** (`pe-x402-gateway.service`).
+**v0.3.1** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
 
 | Route | Behavior |
 |-------|----------|
@@ -15,9 +15,11 @@ Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable v
 | `POST /v1/citation-check` | **402** unless `X-PE-DEMO: 1` |
 | `GET/POST /v1/opportunity-scan` | **402** unless demo header |
 | `POST /v1/diff-review` | **402** unless demo header |
+| `GET/POST /v1/bounty-triage` | **402** unless demo header — ranks local hunter/watchdog snapshots |
 
-Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 tests/test_citation.py`.
+Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 tests/test_citation.py` + `python3 tests/test_bounty_triage.py`.
 
+v0.3.1 adds: `/v1/bounty-triage` (skip farms/contests/illiquid markers; never invents $).
 v0.3 adds: sliding-window rate limit, in-process metering, honest receipt stub (never trusts bare `X-PAYMENT`), `/v1/diff-review`.
 
 ## Pay path

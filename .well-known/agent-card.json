@@ -1,7 +1,7 @@
 {
   "name": "hermes-profit-engine",
-  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
-  "version": "0.3.0",
+  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
+  "version": "0.3.1",
   "provider": {
     "organization": "unicentrocucuta",
     "url": "https://github.com/unicentrocucuta/pe-x402-gateway"
@@ -31,6 +31,12 @@
       "name": "Diff heuristic review",
       "description": "Structured risks/suggestions/confidence for a provided unified diff (no network fetch).",
       "tags": ["code-review", "static", "x402"]
+    },
+    {
+      "id": "bounty-triage",
+      "name": "Bounty triage",
+      "description": "Rank local hunter/watchdog snapshots with skip filters (farms, contests, illiquid tokens). Does not invent rewards.",
+      "tags": ["bounties", "triage", "x402"]
     }
   ],
   "endpoints": {
@@ -39,7 +45,8 @@
     "agentCard": "/.well-known/agent-card.json",
     "citationCheck": "/v1/citation-check",
     "opportunityScan": "/v1/opportunity-scan",
-    "diffReview": "/v1/diff-review"
+    "diffReview": "/v1/diff-review",
+    "bountyTriage": "/v1/bounty-triage"
   },
   "payment": {
     "protocol": "x402",

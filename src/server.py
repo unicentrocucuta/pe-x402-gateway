@@ -26,13 +26,14 @@ from citation import score_claim  # noqa: E402
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
     "/v1/citation-check": 0.02,
     "/v1/opportunity-scan": 0.01,
     "/v1/diff-review": 0.03,
+    "/v1/bounty-triage": 0.02,
 }
 
 # Free demo: limited body size; header X-PE-DEMO: 1 bypasses 402 for paid routes
@@ -139,6 +140,137 @@ def _opportunity_scan_payload() -> dict:
         "items": items,
         "filter": "hunter_cash_candidates_no_contests",
         "payment": "stub_or_demo",
+    }
+
+
+def _bounty_triage_payload(data: dict | None = None) -> dict:
+    """Rank local hunter/watchdog snapshots; never invent rewards."""
+    data = data or {}
+    limit = int(data.get("limit") or 10)
+    limit = max(1, min(limit, 25))
+    skip_orgs = {
+        "myzubster-ecosystem",
+        "zhangjiayang6835-cyber",
+        "xevrion",
+    }
+    paths = [
+        Path("/home/dany/projects/profit-engine/deliverables/HUNTER_LATEST.json"),
+        Path("/home/dany/projects/profit-engine/deliverables/HUNT_TICK.json"),
+        Path("/home/dany/projects/profit-engine/deliverables/WATCHDOG_STATE.json"),
+    ]
+    rows: list[dict] = []
+    sources_used: list[str] = []
+    for p in paths:
+        if not p.exists():
+            continue
+        try:
+            blob = json.loads(p.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            continue
+        sources_used.append(p.name)
+        if isinstance(blob.get("cash_candidates"), list):
+            for c in blob["cash_candidates"]:
+                rows.append(
+                    {
+                        "title": c.get("title"),
+                        "url": c.get("url"),
+                        "repo": c.get("repo"),
+                        "comments": c.get("comments"),
+                        "amount_guess_usd": c.get("amount_guess") or c.get("amount_guess_usd"),
+                        "score_in": c.get("score"),
+                        "src": p.name,
+                    }
+                )
+        if isinstance(blob.get("top"), list):
+            for c in blob["top"]:
+                rows.append(
+                    {
+                        "title": c.get("title"),
+                        "url": c.get("url"),
+                        "repo": c.get("repo"),
+                        "comments": c.get("comments"),
+                        "amount_guess_usd": c.get("amount_guess"),
+                        "score_in": c.get("score"),
+                        "src": p.name,
+                    }
+                )
+        if isinstance(blob.get("top_actionable"), list):
+            for c in blob["top_actionable"]:
+                rows.append(
+                    {
+                        "title": c.get("title"),
+                        "url": c.get("url"),
+                        "repo": c.get("repo"),
+                        "comments": c.get("comments"),
+                        "amount_guess_usd": c.get("reward_guess_usd"),
+                        "score_in": c.get("score"),
+                        "src": p.name,
+                    }
+                )
+    # de-dupe by url
+    seen: set[str] = set()
+    ranked: list[dict] = []
+    for r in rows:
+        url = (r.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        repo = (r.get("repo") or "").lower()
+        org = repo.split("/")[0] if "/" in repo else ""
+        title = (r.get("title") or "").lower()
+        if org in skip_orgs or "funding-pending" in title:
+            continue
+        if title.count("[bounty]") >= 3:
+            continue
+        comments = int(r.get("comments") or 0)
+        amount = r.get("amount_guess_usd")
+        try:
+            amount_f = float(amount) if amount is not None else None
+        except (TypeError, ValueError):
+            amount_f = None
+        score = float(r.get("score_in") or 0)
+        if amount_f:
+            score += min(amount_f / 50.0, 15.0)
+        score -= min(comments, 100) * 0.12
+        if comments <= 5:
+            score += 3.0
+        if comments > 50:
+            score -= 6.0
+        # contests / illiquid markers
+        if any(k in title for k in ("contest", "podium", "raffle", "$myz", "arrow reward")):
+            score -= 20.0
+        decision = "consider"
+        if score < 0:
+            decision = "skip"
+        elif amount_f and amount_f >= 50 and comments <= 20:
+            decision = "pursue"
+        elif amount_f is None and comments > 15:
+            decision = "skip_unfunded_or_noisy"
+        ranked.append(
+            {
+                "title": r.get("title"),
+                "url": url,
+                "repo": r.get("repo"),
+                "comments": comments,
+                "amount_guess_usd": amount_f,
+                "score": round(score, 2),
+                "decision": decision,
+                "src": r.get("src"),
+            }
+        )
+        seen.add(url)
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+    return {
+        "ok": True,
+        "count": len(ranked[:limit]),
+        "items": ranked[:limit],
+        "sources": sources_used,
+        "filters": {
+            "skip_orgs": sorted(skip_orgs),
+            "skip": ["contests", "funding-pending", "title-farms", "illiquid-token-markers"],
+        },
+        "method": "local_snapshot_triage_v1",
+        "payment": "stub_or_demo",
+        "honesty": "amount_guess may be null; never treat as guaranteed pay",
     }
 
 
@@ -292,6 +424,7 @@ class Handler(BaseHTTPRequestHandler):
                         "citation-check",
                         "opportunity-scan",
                         "diff-review",
+                        "bounty-triage",
                         "agent-card",
                         "metrics",
                     ],
@@ -324,6 +457,15 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate_paid(path):
                 return
             payload = _opportunity_scan_payload()
+            payload["mode"] = "demo"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/bounty-triage":
+            if not self._gate_paid(path):
+                return
+            qs = parse_qs(parsed.query)
+            limit = (qs.get("limit") or ["10"])[0]
+            payload = _bounty_triage_payload({"limit": limit})
             payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return
@@ -379,6 +521,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             data = _read_json(self)
             payload = _diff_review_payload(data)
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/bounty-triage":
+            if not self._gate_paid(path):
+                return
+            data = _read_json(self)
+            payload = _bounty_triage_payload(data)
+            payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return
         self._send_json(404, {"error": "not_found", "path": path}, path=path)
