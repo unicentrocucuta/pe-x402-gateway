@@ -1,5 +1,9 @@
 # PE x402 / A2A gateway (line A1 + B3)
 
+**Public:** https://x402.lagaceta.net  
+**Agent card:** https://x402.lagaceta.net/.well-known/agent-card.json  
+**Origin bind:** `127.0.0.1:8791` (not public).
+
 Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
 
 ## Status (2026-08-04T19:40Z)
