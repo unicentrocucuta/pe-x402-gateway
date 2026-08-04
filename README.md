@@ -2,9 +2,9 @@
 
 Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
 
-## Status (2026-08-04T18:10Z)
+## Status (2026-08-04T18:35Z)
 
-**v0.3.1** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
+**v0.3.2** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
 
 | Route | Behavior |
 |-------|----------|
@@ -16,9 +16,11 @@ Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable v
 | `GET/POST /v1/opportunity-scan` | **402** unless demo header |
 | `POST /v1/diff-review` | **402** unless demo header |
 | `GET/POST /v1/bounty-triage` | **402** unless demo header — ranks local hunter/watchdog snapshots |
+| `GET/POST /v1/ve-estimate` | **402** unless demo header — cons/central/opt net VE ranges |
 
-Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 tests/test_citation.py` + `python3 tests/test_bounty_triage.py`.
+Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 -m unittest discover -s tests -v` (9 tests).
 
+v0.3.2 adds: `/v1/ve-estimate` (honest ranges; contests/token forced low P(pay)).
 v0.3.1 adds: `/v1/bounty-triage` (skip farms/contests/illiquid markers; never invents $).
 v0.3 adds: sliding-window rate limit, in-process metering, honest receipt stub (never trusts bare `X-PAYMENT`), `/v1/diff-review`.
 
@@ -37,6 +39,9 @@ python3 src/server.py
 curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
   -d '{"claim":"USDC settles fast on Base","sources":[{"text":"USDC on Base settles in seconds"}]}' \
   http://127.0.0.1:8791/v1/citation-check
+curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
+  -d '{"reward_usd":100,"hours":2,"competitors":5,"pay_type":"opire"}' \
+  http://127.0.0.1:8791/v1/ve-estimate
 curl -sS http://127.0.0.1:8791/metrics
 ```
 

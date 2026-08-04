@@ -22,11 +22,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from citation import score_claim  # noqa: E402
+from ve import estimate_ve  # noqa: E402
 
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
@@ -34,6 +35,7 @@ PRICES = {
     "/v1/opportunity-scan": 0.01,
     "/v1/diff-review": 0.03,
     "/v1/bounty-triage": 0.02,
+    "/v1/ve-estimate": 0.01,
 }
 
 # Free demo: limited body size; header X-PE-DEMO: 1 bypasses 402 for paid routes
@@ -425,6 +427,7 @@ class Handler(BaseHTTPRequestHandler):
                         "opportunity-scan",
                         "diff-review",
                         "bounty-triage",
+                        "ve-estimate",
                         "agent-card",
                         "metrics",
                     ],
@@ -467,6 +470,22 @@ class Handler(BaseHTTPRequestHandler):
             limit = (qs.get("limit") or ["10"])[0]
             payload = _bounty_triage_payload({"limit": limit})
             payload["mode"] = "demo"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/ve-estimate":
+            if not self._gate_paid(path):
+                return
+            qs = parse_qs(parsed.query)
+            data = {
+                "reward_usd": (qs.get("reward_usd") or qs.get("reward") or ["0"])[0],
+                "hours": (qs.get("hours") or ["2"])[0],
+                "competitors": (qs.get("competitors") or ["0"])[0],
+                "pay_type": (qs.get("pay_type") or ["unknown"])[0],
+                "hourly_cost_usd": (qs.get("hourly_cost_usd") or ["25"])[0],
+            }
+            if qs.get("p_pay_central"):
+                data["p_pay_central"] = qs["p_pay_central"][0]
+            payload = estimate_ve(data)
             self._send_json(200, payload, path=path, demo=True)
             return
         if path == "/":
@@ -529,6 +548,13 @@ class Handler(BaseHTTPRequestHandler):
             data = _read_json(self)
             payload = _bounty_triage_payload(data)
             payload["mode"] = "demo"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/ve-estimate":
+            if not self._gate_paid(path):
+                return
+            data = _read_json(self)
+            payload = estimate_ve(data if isinstance(data, dict) else {})
             self._send_json(200, payload, path=path, demo=True)
             return
         self._send_json(404, {"error": "not_found", "path": path}, path=path)
