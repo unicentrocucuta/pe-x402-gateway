@@ -28,7 +28,7 @@ from ve import estimate_ve  # noqa: E402
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.4"
+VERSION = "0.3.5"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
@@ -40,6 +40,7 @@ PRICES = {
     "/v1/pay-path-filter": 0.01,
     "/v1/batch-pay-path": 0.02,
     "/v1/portfolio-status": 0.01,
+    "/v1/pr-watch": 0.01,
 }
 
 # Free demo: limited body size; header X-PE-DEMO: 1 bypasses 402 for paid routes
@@ -327,6 +328,105 @@ def _portfolio_status_payload() -> dict:
     return out
 
 
+def _pr_watch_payload() -> dict:
+    """Local snapshot of tracked PRs from hunter/RUN_STATE — no live network.
+
+    Agents use this to decide whether to ping maintainers or sit quiet.
+    Never invents review/merge outcomes.
+    """
+    hunt = Path("/home/dany/projects/profit-engine/deliverables/HUNTER_LATEST.json")
+    run_path = Path("/home/dany/projects/profit-engine/RUN_STATE.json")
+    out: dict = {
+        "ok": True,
+        "method": "pr_watch_local_v1",
+        "payment": "stub_or_demo",
+        "honesty": (
+            "Reads local HUNTER_LATEST + RUN_STATE only. "
+            "Does not call GitHub. Stale if hunter not refreshed."
+        ),
+        "prs": [],
+        "open_count": 0,
+        "merged_count": 0,
+        "needs_attention": [],
+    }
+    known: list[dict] = []
+    if hunt.exists():
+        try:
+            blob = json.loads(hunt.read_text(encoding="utf-8"))
+            out["hunter_scanned_at_utc"] = blob.get("scanned_at_utc")
+            for key in ("known_prs", "our_prs"):
+                for p in blob.get(key) or []:
+                    if isinstance(p, dict):
+                        known.append(p)
+        except Exception as exc:  # noqa: BLE001
+            out["hunter_error"] = str(exc)
+    # Enrich with reward labels from RUN_STATE when PR URL matches
+    reward_by_url: dict[str, str] = {}
+    if run_path.exists():
+        try:
+            st = json.loads(run_path.read_text(encoding="utf-8"))
+            for ln in st.get("active_lines") or []:
+                if not isinstance(ln, dict):
+                    continue
+                pru = (ln.get("pr") or "").strip()
+                if pru:
+                    reward_by_url[pru] = str(ln.get("reward") or "")
+            for opp in st.get("active_opportunities") or []:
+                if not isinstance(opp, dict):
+                    continue
+                pru = (opp.get("pr") or "").strip()
+                if pru and pru not in reward_by_url:
+                    reward_by_url[pru] = str(opp.get("reward") or "")
+        except Exception as exc:  # noqa: BLE001
+            out["run_state_error"] = str(exc)
+
+    seen: set[str] = set()
+    prs: list[dict] = []
+    for p in known:
+        url = (p.get("url") or p.get("html_url") or "").strip()
+        if not url:
+            repo = p.get("repo") or ""
+            num = p.get("number")
+            if repo and num:
+                url = f"https://github.com/{repo}/pull/{num}"
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        state = (p.get("state") or "").lower()
+        merged = bool(p.get("merged"))
+        mergeable = p.get("mergeable")
+        row = {
+            "repo": p.get("repo"),
+            "number": p.get("number"),
+            "title": p.get("title"),
+            "url": url,
+            "state": state or None,
+            "merged": merged,
+            "mergeable": mergeable,
+            "updated_at": p.get("updated_at") or p.get("updated"),
+            "draft": p.get("draft"),
+            "reward": reward_by_url.get(url) or None,
+            "error": p.get("error"),
+        }
+        prs.append(row)
+        if merged or state == "closed" and merged:
+            out["merged_count"] += 1
+        elif state == "open" or (not merged and state != "closed"):
+            out["open_count"] += 1
+        # attention heuristics (local only)
+        if p.get("error"):
+            out["needs_attention"].append({"url": url, "reason": "snapshot_error"})
+        elif state == "open" and mergeable is False:
+            out["needs_attention"].append({"url": url, "reason": "not_mergeable"})
+        elif state == "open" and p.get("draft") is True:
+            out["needs_attention"].append({"url": url, "reason": "still_draft"})
+
+    prs.sort(key=lambda r: (0 if r.get("state") == "open" else 1, r.get("url") or ""))
+    out["prs"] = prs[:40]
+    out["count"] = len(out["prs"])
+    return out
+
+
 def _diff_review_payload(data: dict) -> dict:
     """Lightweight structured review of a provided unified diff (no network)."""
     title = str(data.get("title") or "")[:300]
@@ -482,6 +582,7 @@ class Handler(BaseHTTPRequestHandler):
                         "pay-path-filter",
                         "batch-pay-path",
                         "portfolio-status",
+                        "pr-watch",
                         "agent-card",
                         "metrics",
                     ],
@@ -568,6 +669,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate_paid(path):
                 return
             payload = _portfolio_status_payload()
+            payload["mode"] = "demo"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/pr-watch":
+            if not self._gate_paid(path):
+                return
+            payload = _pr_watch_payload()
             payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return
@@ -658,6 +766,13 @@ class Handler(BaseHTTPRequestHandler):
             if not self._gate_paid(path):
                 return
             payload = _portfolio_status_payload()
+            payload["mode"] = "demo"
+            self._send_json(200, payload, path=path, demo=True)
+            return
+        if path == "/v1/pr-watch":
+            if not self._gate_paid(path):
+                return
+            payload = _pr_watch_payload()
             payload["mode"] = "demo"
             self._send_json(200, payload, path=path, demo=True)
             return

@@ -1,7 +1,7 @@
 {
   "name": "hermes-profit-engine",
-  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage, VE estimate ranges, pay-path filter, batch pay-path, portfolio status. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
-  "version": "0.3.4",
+  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage, VE estimate ranges, pay-path filter, batch pay-path, portfolio status, PR watch. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
+  "version": "0.3.5",
   "provider": {
     "organization": "unicentrocucuta",
     "url": "https://github.com/unicentrocucuta/pe-x402-gateway"
@@ -61,6 +61,12 @@
       "name": "Portfolio status",
       "description": "Local PE active lines + realized net reminder from RUN_STATE (no invented balances).",
       "tags": ["ops", "portfolio", "x402"]
+    },
+    {
+      "id": "pr-watch",
+      "name": "PR watch",
+      "description": "Local snapshot of tracked open PRs (mergeable/merged/attention) from hunter + RUN_STATE rewards. No live GitHub call.",
+      "tags": ["ops", "github", "x402"]
     }
   ],
   "endpoints": {
@@ -74,7 +80,8 @@
     "veEstimate": "/v1/ve-estimate",
     "payPathFilter": "/v1/pay-path-filter",
     "batchPayPath": "/v1/batch-pay-path",
-    "portfolioStatus": "/v1/portfolio-status"
+    "portfolioStatus": "/v1/portfolio-status",
+    "prWatch": "/v1/pr-watch"
   },
   "payment": {
     "protocol": "x402",

@@ -2,9 +2,9 @@
 
 Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
 
-## Status (2026-08-04T19:20Z)
+## Status (2026-08-04T19:40Z)
 
-**v0.3.4** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
+**v0.3.5** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
 
 | Route | Behavior |
 |-------|----------|
@@ -20,9 +20,11 @@ Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable v
 | `GET/POST /v1/pay-path-filter` | **402** unless demo header — classify real pay path vs noise |
 | `POST /v1/batch-pay-path` | **402** unless demo — bulk classify ≤25 items + pursue/consider shortlists |
 | `GET/POST /v1/portfolio-status` | **402** unless demo — local RUN_STATE lines + realized net |
+| `GET/POST /v1/pr-watch` | **402** unless demo — tracked PR open/mergeable/attention from local hunter |
 
 Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 -m unittest discover -s tests -v`.
 
+v0.3.5 adds: `/v1/pr-watch` + MRG/AIPOU illiquid markers in pay-path filter.
 v0.3.4 adds: `/v1/batch-pay-path`, `/v1/portfolio-status`.
 v0.3.3 adds: `/v1/pay-path-filter` (skip unfunded Opire footers, contests, illiquid tokens; pursue algora/titled $).
 v0.3.2 adds: `/v1/ve-estimate` (honest ranges; contests/token forced low P(pay)).
@@ -44,9 +46,7 @@ python3 src/server.py
 curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
   -d '{"claim":"USDC settles fast on Base","sources":[{"text":"USDC on Base settles in seconds"}]}' \
   http://127.0.0.1:8791/v1/citation-check
-curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
-  -d '{"reward_usd":100,"hours":2,"competitors":5,"pay_type":"opire"}' \
-  http://127.0.0.1:8791/v1/ve-estimate
+curl -sS -H 'X-PE-DEMO: 1' http://127.0.0.1:8791/v1/pr-watch
 curl -sS http://127.0.0.1:8791/metrics
 ```
 

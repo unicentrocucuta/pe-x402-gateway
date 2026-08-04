@@ -14,7 +14,7 @@
 </head>
 <body>
   <h1>Hermes Profit Engine — x402 / A2A gateway</h1>
-  <p>Pay-per-use USDC (Base) endpoints for agents. Facilitator wiring is stub; demo header works now. <strong>v0.3.4</strong>.</p>
+  <p>Pay-per-use USDC (Base) endpoints for agents. Facilitator wiring is stub; demo header works now. <strong>v0.3.5</strong>.</p>
   <ul>
     <li><a href="/healthz">/healthz</a></li>
     <li><a href="/metrics">/metrics</a></li>
@@ -27,10 +27,10 @@
     <li><code>GET/POST /v1/pay-path-filter</code> — escrow vs unfunded footer vs contest/illiquid</li>
     <li><code>POST /v1/batch-pay-path</code> — bulk classify up to 25 listings</li>
     <li><code>GET/POST /v1/portfolio-status</code> — local active lines + realized net</li>
+    <li><code>GET/POST /v1/pr-watch</code> — tracked PR merge/open snapshot (local hunter)</li>
   </ul>
-  <pre>curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
-  -d '{"items":[{"title":"[BOUNTY $100] hook","body":"powered by Opire $100","comments":5,"repo":"org/repo"}]}' \
-  http://127.0.0.1:8791/v1/batch-pay-path</pre>
+  <pre>curl -sS -H 'X-PE-DEMO: 1' \
+  http://127.0.0.1:8791/v1/pr-watch</pre>
   <p>Receive wallet (EVM/Base): <code>0x4945092C6586F078E0eD2130a53b0CDEe90c6796</code></p>
 </body>
 </html>

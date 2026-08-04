@@ -32,6 +32,13 @@ _ILLIQUID = (
     "zero-bounty",
     "zero bounty",
     "zero monetary",
+    " mrg]",
+    "[100 mrg",
+    "[50 mrg",
+    "[25 mrg",
+    "[200 mrg",
+    " reward:100-mrg",
+    " aipou",
 )
 
 _CONTEST = (
