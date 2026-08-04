@@ -1,0 +1,53 @@
+{
+  "name": "hermes-profit-engine",
+  "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
+  "version": "0.3.0",
+  "provider": {
+    "organization": "unicentrocucuta",
+    "url": "https://github.com/unicentrocucuta/pe-x402-gateway"
+  },
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false
+  },
+  "defaultInputModes": ["text", "application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "citation-check",
+      "name": "Citation support check",
+      "description": "Score whether a claim is supported by provided source texts (lexical MVP). Client supplies sources; no silent web fetch.",
+      "tags": ["verification", "rag", "x402"],
+      "examples": ["Is claim X supported by these source excerpts?"]
+    },
+    {
+      "id": "opportunity-scan",
+      "name": "Funded opportunity scan",
+      "description": "Return high-signal funded bounty/escrow candidates from PE hunter snapshot (no contests).",
+      "tags": ["bounties", "escrow", "market-intel"]
+    },
+    {
+      "id": "diff-review",
+      "name": "Diff heuristic review",
+      "description": "Structured risks/suggestions/confidence for a provided unified diff (no network fetch).",
+      "tags": ["code-review", "static", "x402"]
+    }
+  ],
+  "endpoints": {
+    "health": "/healthz",
+    "metrics": "/metrics",
+    "agentCard": "/.well-known/agent-card.json",
+    "citationCheck": "/v1/citation-check",
+    "opportunityScan": "/v1/opportunity-scan",
+    "diffReview": "/v1/diff-review"
+  },
+  "payment": {
+    "protocol": "x402",
+    "currency": "USDC",
+    "chain": "base",
+    "status": "stub_with_demo",
+    "demo_header": "X-PE-DEMO: 1",
+    "receive_wallet_evm": "0x4945092C6586F078E0eD2130a53b0CDEe90c6796",
+    "note": "X-PAYMENT is not accepted as proof until facilitator verification is wired"
+  }
+}

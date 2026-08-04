@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PE x402 Gateway</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #e8eaed; background: #0f1419; }
+    a { color: #7dd3fc; }
+    code, pre { background: #1a2332; padding: 0.2rem 0.4rem; border-radius: 4px; }
+    pre { padding: 1rem; overflow-x: auto; }
+    h1 { font-size: 1.4rem; }
+  </style>
+</head>
+<body>
+  <h1>Hermes Profit Engine — x402 / A2A gateway</h1>
+  <p>Pay-per-use USDC (Base) endpoints for agents. Facilitator wiring is stub; demo header works now. v0.3.</p>
+  <ul>
+    <li><a href="/healthz">/healthz</a></li>
+    <li><a href="/metrics">/metrics</a></li>
+    <li><a href="/.well-known/agent-card.json">/.well-known/agent-card.json</a></li>
+    <li><code>POST /v1/citation-check</code> — header <code>X-PE-DEMO: 1</code> for free demo</li>
+    <li><code>GET /v1/opportunity-scan</code> — same demo header</li>
+    <li><code>POST /v1/diff-review</code> — same demo header</li>
+  </ul>
+  <pre>curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
+  -d '{"claim":"USDC settles fast on Base","sources":[{"text":"USDC on Base settles in seconds"}]}' \
+  http://127.0.0.1:8791/v1/citation-check</pre>
+  <p>Receive wallet (EVM/Base): <code>0x4945092C6586F078E0eD2130a53b0CDEe90c6796</code></p>
+</body>
+</html>

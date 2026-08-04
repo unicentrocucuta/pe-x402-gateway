@@ -1,0 +1,45 @@
+# PE x402 / A2A gateway (line A1 + B3)
+
+Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
+
+## Status (2026-08-04T17:45Z)
+
+**v0.3.0** on VPS port **8791** (`pe-x402-gateway.service`).
+
+| Route | Behavior |
+|-------|----------|
+| `GET /healthz` | free |
+| `GET /metrics` | free counters (no secrets) |
+| `GET /.well-known/agent-card.json` | free discovery |
+| `GET /` | static index |
+| `POST /v1/citation-check` | **402** unless `X-PE-DEMO: 1` |
+| `GET/POST /v1/opportunity-scan` | **402** unless demo header |
+| `POST /v1/diff-review` | **402** unless demo header |
+
+Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 tests/test_citation.py`.
+
+v0.3 adds: sliding-window rate limit, in-process metering, honest receipt stub (never trusts bare `X-PAYMENT`), `/v1/diff-review`.
+
+## Pay path
+
+- Per-call USDC on **Base** once facilitator wired.
+- Receive wallet: `0x4945092C6586F078E0eD2130a53b0CDEe90c6796`
+- Until facilitator: demo header is free (size-capped); 402 body documents real challenge shape.
+- **Honesty:** client-supplied payment headers do **not** unlock paid routes.
+
+## Run local
+
+```bash
+python3 src/server.py
+# GET http://127.0.0.1:8791/healthz
+curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
+  -d '{"claim":"USDC settles fast on Base","sources":[{"text":"USDC on Base settles in seconds"}]}' \
+  http://127.0.0.1:8791/v1/citation-check
+curl -sS http://127.0.0.1:8791/metrics
+```
+
+## Next (pay rail)
+
+1. Wire free-tier x402 facilitator / CDP if available without cash spend
+2. Publish public URL + agent-card in registries when HTTPS front exists
+3. Meter demo → paid once verify path exists
