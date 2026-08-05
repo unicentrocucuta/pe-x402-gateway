@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Minimal PE agent gateway — health + agent-card + citation MVP + x402-shaped 402.
+"""Minimal PE agent gateway — health + agent-card + citation MVP + x402 PayAI settle.
 
-v0.3: in-process rate limit, request metering, honest payment receipt stub,
-metrics endpoint (free, no secrets).
+v0.4: PayAI facilitator verify+settle (Base USDC). Demo header still free/size-capped.
 """
 from __future__ import annotations
 
+import base64
+import csv
 import json
 import os
 import sys
 import threading
 import time
 from collections import defaultdict, deque
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -22,13 +24,26 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from citation import score_claim  # noqa: E402
+from facilitator import (  # noqa: E402
+    PAYAI_URL,
+    PAY_TO_DEFAULT,
+    USDC_BASE,
+    challenge_body,
+    payment_requirements,
+    verify_and_settle,
+)
 from pay_path import classify_pay_path, classify_pay_path_batch  # noqa: E402
 from ve import estimate_ve  # noqa: E402
 
 CARD = (ROOT / ".well-known" / "agent-card.json").read_text()
 HOST = os.environ.get("PE_X402_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PE_X402_PORT", "8791"))
-VERSION = "0.3.5"
+VERSION = "0.4.0"
+PUBLIC_BASE = os.environ.get("PE_X402_PUBLIC_BASE", "https://x402.lagaceta.net").rstrip("/")
+PE_ROOT = Path(os.environ.get("PE_ROOT", "/home/dany/projects/profit-engine"))
+SETTLEMENTS_PATH = PE_ROOT / "deliverables" / "SETTLEMENTS.jsonl"
+PROFIT_LEDGER = PE_ROOT / "PROFIT_LEDGER.csv"
+HEARTBEAT = PE_ROOT / "deliverables" / "ACTIVITY_HEARTBEAT.txt"
 
 # Placeholder prices (USD) until facilitator live
 PRICES = {
@@ -59,8 +74,11 @@ _hits: dict[str, int] = defaultdict(int)
 _status: dict[str, int] = defaultdict(int)
 _demo_hits = 0
 _paid_stub_hits = 0
+_paid_settled = 0
 _started = time.time()
 _rate: dict[str, deque] = defaultdict(deque)
+# request-local settlement receipt (thread-local)
+_tls = threading.local()
 
 
 def _client_ip(handler: BaseHTTPRequestHandler) -> str:
@@ -82,15 +100,24 @@ def _rate_allow(ip: str) -> bool:
         return True
 
 
-def _meter(path: str, code: int, *, demo: bool = False, paid_stub: bool = False) -> None:
+def _meter(
+    path: str,
+    code: int,
+    *,
+    demo: bool = False,
+    paid_stub: bool = False,
+    settled: bool = False,
+) -> None:
     with _lock:
         _hits[path] += 1
         _status[str(code)] += 1
-        global _demo_hits, _paid_stub_hits
+        global _demo_hits, _paid_stub_hits, _paid_settled
         if demo:
             _demo_hits += 1
         if paid_stub:
             _paid_stub_hits += 1
+        if settled:
+            _paid_settled += 1
 
 
 def _metrics_snapshot() -> dict:
@@ -104,9 +131,103 @@ def _metrics_snapshot() -> dict:
             "status_counts": dict(_status),
             "demo_hits": _demo_hits,
             "paid_stub_challenges": _paid_stub_hits,
-            "payment": "stub_with_demo",
+            "paid_settled": _paid_settled,
+            "payment": "payai_base_usdc",
+            "facilitator": PAYAI_URL,
+            "payTo": os.environ.get("PE_X402_PAY_TO", PAY_TO_DEFAULT),
+            "asset": USDC_BASE,
+            "network": "base",
             "rate_limit": {"window_s": RATE_LIMIT_WINDOW_S, "max": RATE_LIMIT_MAX},
         }
+
+
+def _b64(obj: dict) -> str:
+    return base64.b64encode(json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode()).decode()
+
+
+def _decode_payment_header(raw: str) -> dict | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    # Accept raw JSON or base64 JSON
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
+    try:
+        pad = "=" * (-len(raw) % 4)
+        data = json.loads(base64.b64decode(raw + pad).decode("utf-8", "replace"))
+        return data if isinstance(data, dict) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _log_settlement(path: str, result, amount_atomic: str, usd: float) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    row = {
+        "at": now,
+        "path": path,
+        "ok": True,
+        "tx": result.tx,
+        "payer": result.payer,
+        "rail": result.rail,
+        "amount_atomic": str(amount_atomic),
+        "usd": usd,
+        "payTo": os.environ.get("PE_X402_PAY_TO", PAY_TO_DEFAULT),
+        "network": "base",
+        "asset": USDC_BASE,
+    }
+    try:
+        SETTLEMENTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with SETTLEMENTS_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        with HEARTBEAT.open("a", encoding="utf-8") as f:
+            f.write(f"{now} SETTLEMENT path={path} tx={result.tx} usd={usd} rail={result.rail}\n")
+    except Exception:  # noqa: BLE001
+        pass
+    # Realized ledger (receive only)
+    try:
+        new_file = not PROFIT_LEDGER.exists() or PROFIT_LEDGER.stat().st_size == 0
+        with PROFIT_LEDGER.open("a", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            if new_file:
+                w.writerow(
+                    [
+                        "date_utc",
+                        "tx_id",
+                        "source_platform",
+                        "opportunity_id",
+                        "gross_received_usd",
+                        "direct_costs_usd",
+                        "net_realized_usd",
+                        "currency_original",
+                        "amount_original",
+                        "payment_method",
+                        "notes",
+                    ]
+                )
+            w.writerow(
+                [
+                    now,
+                    result.tx,
+                    "x402_payai",
+                    f"pe_x402:{path}",
+                    f"{usd:.6f}",
+                    "0",
+                    f"{usd:.6f}",
+                    "USDC",
+                    f"{usd:.6f}",
+                    "usdc_base",
+                    f"payer={result.payer};rail={result.rail}",
+                ]
+            )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict:
@@ -487,68 +608,166 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_json(self, code: int, obj: dict, *, path: str = "", demo: bool = False, paid_stub: bool = False):
+    def _send_json(
+        self,
+        code: int,
+        obj: dict,
+        *,
+        path: str = "",
+        demo: bool = False,
+        paid_stub: bool = False,
+        settled: bool = False,
+        extra_headers: dict | None = None,
+    ):
         if path:
-            _meter(path, code, demo=demo, paid_stub=paid_stub)
-        self._send(code, json.dumps(obj, ensure_ascii=False).encode())
+            _meter(path, code, demo=demo, paid_stub=paid_stub, settled=settled)
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-PE-Version", VERSION)
+        if settled:
+            receipt = getattr(_tls, "receipt", None)
+            if isinstance(receipt, dict):
+                self.send_header("PAYMENT-RESPONSE", _b64(receipt))
+                self.send_header("X-PAYMENT-RESPONSE", _b64(receipt))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(body)
 
     def _is_demo(self) -> bool:
         return (self.headers.get(DEMO_HEADER) or "").strip() in ("1", "true", "yes")
 
-    def _has_valid_payment(self) -> bool:
-        """Honest stub: X-PAYMENT present is NOT treated as settled.
+    def _payment_header_raw(self) -> str:
+        for name in (
+            "PAYMENT-SIGNATURE",
+            "Payment-Signature",
+            "X-PAYMENT",
+            "X-PAYMENT-SIGNATURE",
+            "x-payment",
+        ):
+            v = self.headers.get(name)
+            if v:
+                return v
+        return ""
 
-        Facilitator verification is not wired. Never grant paid access from a
-        client-supplied header alone.
-        """
-        return False
+    def _try_settle(self, path: str) -> tuple[bool, str | None]:
+        """Verify+settle via facilitator. Returns (ok, error_message)."""
+        raw = self._payment_header_raw()
+        payload = _decode_payment_header(raw)
+        if not payload:
+            return False, None  # no header → 402 challenge
 
-    def _payment_required(self, path: str):
-        challenge = {
-            "x402Version": 1,
-            "error": "Payment required",
-            "accepts": [
-                {
-                    "scheme": "exact",
-                    "network": "base",
-                    "maxAmountRequired": str(int(PRICES[path] * 1_000_000)),
-                    "asset": "USDC",
-                    "payTo": "0x4945092C6586F078E0eD2130a53b0CDEe90c6796",
-                    "resource": path,
-                    "description": (
-                        f"PE paid route {path} (facilitator not wired — "
-                        f"use header {DEMO_HEADER}: 1 for free demo)"
-                    ),
-                }
-            ],
-            "demo": {
-                "header": f"{DEMO_HEADER}: 1",
-                "note": "Demo is free, rate/size limited; not a paid settlement",
-            },
-            "receipt": {
-                "status": "unverified",
-                "note": "X-PAYMENT headers are ignored until facilitator verify is live",
-            },
+        usd = float(PRICES.get(path, 0.01))
+        amount_atomic = str(int(round(usd * 1_000_000)))
+        resource_url = f"{PUBLIC_BASE}{path}"
+        reqs = payment_requirements(
+            path=path,
+            amount_atomic=amount_atomic,
+            resource_url=resource_url,
+            description=f"PE paid route {path}",
+            version=1,
+        )
+        # Align requirements with client-accepted if present
+        accepted = payload.get("accepted") if isinstance(payload.get("accepted"), dict) else None
+        if accepted:
+            for k in ("network", "asset", "payTo", "scheme"):
+                if accepted.get(k):
+                    reqs[k] = accepted[k]
+            if accepted.get("amount") and not reqs.get("maxAmountRequired"):
+                reqs["maxAmountRequired"] = str(accepted["amount"])
+            if accepted.get("amount"):
+                reqs["amount"] = str(accepted["amount"])
+            if accepted.get("maxAmountRequired"):
+                reqs["maxAmountRequired"] = str(accepted["maxAmountRequired"])
+
+        result = verify_and_settle(payload, reqs, prefer=os.environ.get("PE_X402_FACILITATOR", "payai"))
+        if result.ok and result.tx:
+            receipt = {
+                "success": True,
+                "transaction": result.tx,
+                "network": reqs.get("network") or "base",
+                "payer": result.payer or "",
+                "rail": result.rail,
+            }
+            _tls.receipt = receipt
+            _log_settlement(path, result, amount_atomic, usd)
+            return True, None
+
+        err = result.error or "settlement_failed"
+        _tls.receipt = {
+            "success": False,
+            "errorReason": err,
+            "transaction": result.tx or "",
+            "network": reqs.get("network") or "base",
+            "payer": result.payer or "",
+            "rail": result.rail,
+            "detail": result.body if isinstance(result.body, dict) else {},
         }
-        body = json.dumps(challenge).encode()
+        return False, err
+
+    def _payment_required(self, path: str, *, error: str | None = None):
+        usd = float(PRICES.get(path, 0.01))
+        amount_atomic = str(int(round(usd * 1_000_000)))
+        challenge = challenge_body(
+            path=path,
+            amount_atomic=amount_atomic,
+            public_base=PUBLIC_BASE,
+            description=f"PE paid route {path}",
+        )
+        if error:
+            challenge["error"] = error
+            challenge["settlement_error"] = error
+        # Keep demo path documented
+        challenge["demo"] = {
+            "header": f"{DEMO_HEADER}: 1",
+            "note": "Demo is free, rate/size limited; not a paid settlement",
+        }
+        body = json.dumps(challenge, ensure_ascii=False).encode()
         _meter(path, 402, paid_stub=True)
         self.send_response(402)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("X-PAYMENT-REQUIRED", "true")
+        self.send_header("PAYMENT-REQUIRED", _b64(challenge))
         self.send_header("X-PE-Version", VERSION)
         self.end_headers()
         self.wfile.write(body)
 
     def _gate_paid(self, path: str) -> bool:
-        """Return True if request may proceed (demo only until facilitator)."""
+        """Return True if request may proceed (demo or settled payment)."""
+        _tls.receipt = None
+        _tls.mode = "none"
         if self._is_demo():
+            _tls.mode = "demo"
             return True
-        if self._has_valid_payment():
+        ok, err = self._try_settle(path)
+        if ok:
+            _tls.mode = "settled"
             return True
+        if err:
+            # Payment header present but failed
+            self._payment_required(path, error=err)
+            return False
         self._payment_required(path)
         return False
+
+    def _paid_mode_fields(self) -> dict:
+        mode = getattr(_tls, "mode", "demo")
+        out = {"mode": mode, "payment": "payai_base_usdc" if mode == "settled" else mode}
+        receipt = getattr(_tls, "receipt", None)
+        if isinstance(receipt, dict) and receipt.get("transaction"):
+            out["settlement"] = {
+                "tx": receipt.get("transaction"),
+                "payer": receipt.get("payer"),
+                "network": receipt.get("network"),
+                "rail": receipt.get("rail"),
+            }
+        return out
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -556,7 +775,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header(
             "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-PAYMENT, X-PE-DEMO",
+            "Content-Type, Authorization, X-PAYMENT, X-PAYMENT-SIGNATURE, "
+            "PAYMENT-SIGNATURE, PAYMENT-REQUIRED, X-PE-DEMO",
         )
         self.end_headers()
 
@@ -572,7 +792,12 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "service": "pe-x402-gateway",
-                    "payment": "stub",
+                    "payment": "payai_base_usdc",
+                    "facilitator": PAYAI_URL,
+                    "payTo": os.environ.get("PE_X402_PAY_TO", PAY_TO_DEFAULT),
+                    "asset": USDC_BASE,
+                    "network": "base",
+                    "public_base": PUBLIC_BASE,
                     "features": [
                         "citation-check",
                         "opportunity-scan",
@@ -585,6 +810,7 @@ class Handler(BaseHTTPRequestHandler):
                         "pr-watch",
                         "agent-card",
                         "metrics",
+                        "payai-settle",
                     ],
                     "version": VERSION,
                 },
@@ -608,15 +834,27 @@ class Handler(BaseHTTPRequestHandler):
                 claim[:MAX_DEMO_CLAIM],
                 [{"title": "query_source", "text": source_text}] if source_text else [],
             )
-            result["mode"] = "demo"
-            self._send_json(200, result, path=path, demo=True)
+            result.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                result,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/opportunity-scan":
             if not self._gate_paid(path):
                 return
             payload = _opportunity_scan_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/bounty-triage":
             if not self._gate_paid(path):
@@ -624,8 +862,14 @@ class Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = (qs.get("limit") or ["10"])[0]
             payload = _bounty_triage_payload({"limit": limit})
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/ve-estimate":
             if not self._gate_paid(path):
@@ -641,7 +885,14 @@ class Handler(BaseHTTPRequestHandler):
             if qs.get("p_pay_central"):
                 data["p_pay_central"] = qs["p_pay_central"][0]
             payload = estimate_ve(data)
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/pay-path-filter":
             if not self._gate_paid(path):
@@ -655,29 +906,54 @@ class Handler(BaseHTTPRequestHandler):
                 "labels": (qs.get("labels") or [""])[0],
             }
             payload = classify_pay_path(data)
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/batch-pay-path":
             if not self._gate_paid(path):
                 return
-            # GET: empty batch (shows schema via zero items)
             payload = classify_pay_path_batch({"items": []})
             payload["note"] = "POST JSON {items:[...]} for bulk classify"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/portfolio-status":
             if not self._gate_paid(path):
                 return
             payload = _portfolio_status_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/pr-watch":
             if not self._gate_paid(path):
                 return
             payload = _pr_watch_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/":
             index = ROOT / "public" / "index.html"
@@ -716,65 +992,123 @@ class Handler(BaseHTTPRequestHandler):
                 if budget <= 0:
                     break
             result = score_claim(claim, capped, min_support=float(data.get("min_support") or 0.35))
-            result["mode"] = "demo"
-            self._send_json(200, result, path=path, demo=True)
+            result.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                result,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/opportunity-scan":
             if not self._gate_paid(path):
                 return
             payload = _opportunity_scan_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/diff-review":
             if not self._gate_paid(path):
                 return
             data = _read_json(self)
             payload = _diff_review_payload(data)
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/bounty-triage":
             if not self._gate_paid(path):
                 return
             data = _read_json(self)
             payload = _bounty_triage_payload(data)
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/ve-estimate":
             if not self._gate_paid(path):
                 return
             data = _read_json(self)
             payload = estimate_ve(data if isinstance(data, dict) else {})
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/pay-path-filter":
             if not self._gate_paid(path):
                 return
             data = _read_json(self)
             payload = classify_pay_path(data if isinstance(data, dict) else {})
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/batch-pay-path":
             if not self._gate_paid(path):
                 return
             data = _read_json(self)
             payload = classify_pay_path_batch(data if isinstance(data, dict) else {})
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/portfolio-status":
             if not self._gate_paid(path):
                 return
             payload = _portfolio_status_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         if path == "/v1/pr-watch":
             if not self._gate_paid(path):
                 return
             payload = _pr_watch_payload()
-            payload["mode"] = "demo"
-            self._send_json(200, payload, path=path, demo=True)
+            payload.update(self._paid_mode_fields())
+            self._send_json(
+                200,
+                payload,
+                path=path,
+                demo=self._is_demo(),
+                settled=getattr(_tls, "mode", None) == "settled",
+            )
             return
         self._send_json(404, {"error": "not_found", "path": path}, path=path)
 

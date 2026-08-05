@@ -1,61 +1,48 @@
-# PE x402 / A2A gateway (line A1 + B3)
+# PE x402 / A2A gateway
 
 **Public:** https://x402.lagaceta.net  
 **Agent card:** https://x402.lagaceta.net/.well-known/agent-card.json  
 **Origin bind:** `127.0.0.1:8791` (not public).
 
-Goal: zero-human paid agent endpoints on USDC rails (x402-style), discoverable via agent card.
+## Status (2026-08-05)
 
-## Status (2026-08-04T19:40Z)
-
-**v0.3.5** on VPS port **8791** (`pe-x402-gateway.service` or manual process).
+**v0.4.0** — PayAI facilitator **verify + settle** on **Base USDC** (no API key).
 
 | Route | Behavior |
 |-------|----------|
-| `GET /healthz` | free |
-| `GET /metrics` | free counters (no secrets) |
-| `GET /.well-known/agent-card.json` | free discovery |
-| `GET /` | static index |
-| `POST /v1/citation-check` | **402** unless `X-PE-DEMO: 1` |
-| `GET/POST /v1/opportunity-scan` | **402** unless demo header |
-| `POST /v1/diff-review` | **402** unless demo header |
-| `GET/POST /v1/bounty-triage` | **402** unless demo header — ranks local hunter/watchdog snapshots |
-| `GET/POST /v1/ve-estimate` | **402** unless demo header — cons/central/opt net VE ranges |
-| `GET/POST /v1/pay-path-filter` | **402** unless demo header — classify real pay path vs noise |
-| `POST /v1/batch-pay-path` | **402** unless demo — bulk classify ≤25 items + pursue/consider shortlists |
-| `GET/POST /v1/portfolio-status` | **402** unless demo — local RUN_STATE lines + realized net |
-| `GET/POST /v1/pr-watch` | **402** unless demo — tracked PR open/mergeable/attention from local hunter |
+| `GET /healthz` | free — reports `payment=payai_base_usdc` |
+| `GET /metrics` | free counters |
+| `GET /.well-known/agent-card.json` | free discovery card |
+| Paid `/v1/*` | **402** + `PAYMENT-REQUIRED` (base64) unless settled or `X-PE-DEMO: 1` |
 
-Citation MVP: deterministic lexical overlap scorer (`src/citation.py`). Client supplies source texts — **no silent web fetch**. Tests: `python3 -m unittest discover -s tests -v`.
+### Payment flow
+1. Client calls paid route → **402** with accepts (Base USDC, EIP-3009 exact).
+2. Client signs `TransferWithAuthorization`, retries with **`PAYMENT-SIGNATURE`** (base64 payload).
+3. Server → PayAI `POST /verify` then `POST /settle`.
+4. On success → **200** + payload + `PAYMENT-RESPONSE` (tx hash). Logged to `deliverables/SETTLEMENTS.jsonl` and `PROFIT_LEDGER.csv`.
 
-v0.3.5 adds: `/v1/pr-watch` + MRG/AIPOU illiquid markers in pay-path filter.
-v0.3.4 adds: `/v1/batch-pay-path`, `/v1/portfolio-status`.
-v0.3.3 adds: `/v1/pay-path-filter` (skip unfunded Opire footers, contests, illiquid tokens; pursue algora/titled $).
-v0.3.2 adds: `/v1/ve-estimate` (honest ranges; contests/token forced low P(pay)).
-v0.3.1 adds: `/v1/bounty-triage` (skip farms/contests/illiquid markers; never invents $).
-v0.3 adds: sliding-window rate limit, in-process metering, honest receipt stub (never trusts bare `X-PAYMENT`), `/v1/diff-review`.
+- Facilitator: `https://facilitator.payai.network`
+- Asset: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` (USDC Base)
+- payTo: `0x4945092C6586F078E0eD2130a53b0CDEe90c6796`
+- CDP facilitator: optional backup if keys present (`CDP_API_KEY_*`)
 
-## Pay path
+### Honesty
+- Demo header is free (size-capped) and **not** settlement.
+- Client headers alone never unlock; only facilitator verify+settle.
+- **No discovery/Bazaar publish until first on-chain settlement completes.**
 
-- Per-call USDC on **Base** once facilitator wired.
-- Receive wallet: `0x4945092C6586F078E0eD2130a53b0CDEe90c6796`
-- Until facilitator: demo header is free (size-capped); 402 body documents real challenge shape.
-- **Honesty:** client-supplied payment headers do **not** unlock paid routes.
-
-## Run local
-
+## E2E
 ```bash
-python3 src/server.py
-# GET http://127.0.0.1:8791/healthz
-curl -sS -H 'X-PE-DEMO: 1' -H 'Content-Type: application/json' \
-  -d '{"claim":"USDC settles fast on Base","sources":[{"text":"USDC on Base settles in seconds"}]}' \
-  http://127.0.0.1:8791/v1/citation-check
-curl -sS -H 'X-PE-DEMO: 1' http://127.0.0.1:8791/v1/pr-watch
-curl -sS http://127.0.0.1:8791/metrics
+# after funding buyer in secrets.env
+/home/dany/.hermes/hermes-agent/venv/bin/python \
+  /home/dany/projects/profit-engine/scripts/e2e_x402_pay.py
 ```
 
-## Next (pay rail)
+## Run
+```bash
+# systemd user unit pe-x402-gateway.service
+curl -sS https://x402.lagaceta.net/healthz
+curl -sS -X POST https://x402.lagaceta.net/v1/citation-check -H 'content-type: application/json' -d '{}'
+```
 
-1. Wire free-tier x402 facilitator / CDP if available without cash spend
-2. Publish public URL + agent-card in registries when HTTPS front exists
-3. Meter demo → paid once verify path exists
+Tests: `python3 -m unittest discover -s tests -v`

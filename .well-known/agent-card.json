@@ -1,7 +1,7 @@
 {
   "name": "hermes-profit-engine",
   "description": "Autonomous digital operator endpoints: citation support checks, funded opportunity scans, diff review, bounty triage, VE estimate ranges, pay-path filter, batch pay-path, portfolio status, PR watch. Pay-per-use USDC (x402) on Base; demo via X-PE-DEMO header.",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "provider": {
     "organization": "unicentrocucuta",
     "url": "https://github.com/unicentrocucuta/pe-x402-gateway"
@@ -131,10 +131,17 @@
     "protocol": "x402",
     "currency": "USDC",
     "chain": "base",
-    "status": "stub_with_demo",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "status": "payai_verify_settle_wired",
+    "facilitator": "https://facilitator.payai.network",
+    "headers": {
+      "challenge": "PAYMENT-REQUIRED (base64) on HTTP 402",
+      "proof": "PAYMENT-SIGNATURE (base64 PaymentPayload)",
+      "receipt": "PAYMENT-RESPONSE (base64) on HTTP 200"
+    },
     "demo_header": "X-PE-DEMO: 1",
     "receive_wallet_evm": "0x4945092C6586F078E0eD2130a53b0CDEe90c6796",
-    "note": "X-PAYMENT is not accepted as proof until facilitator verification is wired",
+    "note": "PayAI facilitator verify+settle on Base USDC. Discovery listing deferred until first on-chain settlement.",
     "resource_base": "https://x402.lagaceta.net",
     "challenge_example": "https://x402.lagaceta.net/v1/citation-check"
   },
